@@ -1,62 +1,73 @@
-import http from 'http';
-import { config } from 'dotenv';
-import { DATABASE } from '#database';
-import { client, eventlogger, initSession, loadPlugins } from '#lib';
-import cluster from 'cluster';
-import { sessionData } from '#config';
+const { existsSync, writeFileSync } = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const path = require('node:path');
 
-config();
+const CONFIG = {
+	SESSION_ID: 'XSTRO_80_49_13', // Put your Session ID Here kid!
+	PROJECT_DIR: 'Xstro',
+	REPO_URL: 'https://github.com/AstroX11/Xstro.git',
+	APP_NAME: 'Xstro',
+	MAIN_SCRIPT: 'index.js',
+};
 
-if (cluster.isMaster) {
-	let isRestarting = false;
-
-	const createWorker = () => {
-		const worker = cluster.fork();
-
-		worker.on('message', message => {
-			if (message === 'app.kill') {
-				console.log('Shutting down Xstro...');
-				worker.kill();
-				process.exit(0);
-			} else if (message === 'restart') {
-				console.log('Restarting...');
-				isRestarting = true;
-				worker.kill();
-			}
-		});
-
-		worker.on('exit', () => {
-			if (!isRestarting) console.log('Restarting...');
-			isRestarting = false;
-			createWorker();
-		});
-	};
-
-	createWorker();
-
-	['SIGINT', 'SIGTERM'].forEach(sig => {
-		process.on(sig, () => {
-			for (const id in cluster.workers) {
-				cluster.workers[id].kill();
-			}
-			process.exit(0);
-		});
-	});
-} else {
-	const startServer = async () => {
-		console.log('Starting...');
-		await DATABASE.sync();
-		eventlogger();
-		initSession(sessionData);
-		await loadPlugins();
-		await client();
-
-		http
-			.createServer((req, res) => res.end(JSON.stringify({ alive: req.url === '/' })))
-			.listen(process.env.PORT || 8000);
-	};
-
-	startServer();
-	process.on('unhandledRejection', () => {});
-	process.on('exit', () => process.send('restart'));
+function handleError(message, error) {
+	console.error(message, error);
+	process.exit(1);
 }
+
+function cloneRepository() {
+	console.log('Cloning repository...');
+	const cloneResult = spawnSync(
+		'git',
+		['clone', CONFIG.REPO_URL, CONFIG.PROJECT_DIR],
+		{ stdio: 'inherit', shell: true },
+	);
+	if (cloneResult.error || cloneResult.status !== 0)
+		handleError('Failed to clone repository.', cloneResult.error);
+}
+
+function writeEnvFile() {
+	try {
+		writeFileSync(
+			path.join(CONFIG.PROJECT_DIR, '.env'),
+			`SESSION_ID=${CONFIG.SESSION_ID}`,
+		);
+	} catch (error) {
+		handleError('Failed to write .env file', error);
+	}
+}
+
+function installDependencies() {
+	console.log('Installing dependencies...');
+	const installResult = spawnSync('yarn', ['install'], {
+		cwd: path.resolve(CONFIG.PROJECT_DIR),
+		stdio: 'inherit',
+		shell: true,
+	});
+	if (installResult.error || installResult.status !== 0)
+		handleError('Failed to install dependencies.', installResult.error);
+}
+
+function startApplication() {
+	console.log('Starting application...');
+	const startResult = spawnSync(
+		'node',
+		[CONFIG.MAIN_SCRIPT],
+		{
+			cwd: path.resolve(CONFIG.PROJECT_DIR),
+			stdio: 'inherit',
+			shell: true,
+		},
+	);
+	if (startResult.error || startResult.status !== 0)
+		handleError('Failed to start the application.', startResult.error);
+}
+
+function XstroPanel() {
+	if (!existsSync(CONFIG.PROJECT_DIR)) cloneRepository();
+	writeEnvFile();
+	installDependencies();
+	startApplication();
+}
+
+XstroPanel();
